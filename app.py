@@ -1,5 +1,19 @@
 # -*- coding: utf-8 -*-
-"""التطبيق الرئيسي لخدمة عداد الزوار"""
+"""
+Naebak Visitor Counter Service - Flask Application
+
+This is the main application file for the Naebak Visitor Counter Service. It provides a RESTful API
+for real-time visitor tracking, analytics, and statistics. The service is designed to handle high
+traffic loads while providing accurate visitor counting and detailed analytics.
+
+Key Features:
+- Real-time visitor counting with Redis backend
+- Rate limiting and bot detection
+- Page-level analytics and statistics
+- Hourly traffic pattern analysis
+- Automatic daily counter resets
+- Comprehensive health monitoring
+"""
 
 from flask import Flask, request, jsonify
 from flask_restful import Api, Resource
@@ -12,25 +26,40 @@ from models import VisitorCounterService, VisitorData
 import utils
 import constants
 
-# إنشاء تطبيق Flask
+# Create Flask application
 app = Flask(__name__)
 app.config.from_object(Config)
 
-# إنشاء API
+# Create API
 api = Api(app)
 
-# إنشاء خدمة عداد الزوار
+# Create visitor counter service
 visitor_service = VisitorCounterService()
 
-# إعداد المجدول للمهام التلقائية
+# Setup scheduler for automated tasks
 scheduler = BackgroundScheduler()
 
 class HealthCheck(Resource):
-    """فحص صحة الخدمة"""
+    """
+    Health check endpoint for service monitoring.
+    
+    This resource provides comprehensive health status including Redis connectivity,
+    service version, and current timestamp. It's used by load balancers and monitoring
+    systems to verify service availability.
+    """
     
     def get(self):
+        """
+        Perform health check and return service status.
+        
+        Returns:
+            JSON response with service health information including:
+            - Service status and version
+            - Redis connectivity status
+            - Current timestamp
+        """
         try:
-            # اختبار الاتصال بـ Redis
+            # Test Redis connection
             visitor_service.redis_client.ping()
             redis_status = "connected"
         except Exception as e:
@@ -45,31 +74,62 @@ class HealthCheck(Resource):
         }, 200
 
 class VisitorCounter(Resource):
-    """عداد الزوار الرئيسي"""
+    """
+    Main visitor counting endpoint for real-time tracking.
+    
+    This resource handles visitor registration with comprehensive data collection,
+    bot detection, rate limiting, and analytics tracking. It's the primary endpoint
+    called by frontend applications to record user visits.
+    """
     
     def post(self):
-        """تسجيل زيارة جديدة"""
+        """
+        Record a new visitor interaction.
+        
+        This endpoint processes visitor data, performs validation and bot detection,
+        applies rate limiting, and records the visit with full analytics tracking.
+        
+        Request Body (JSON):
+            page (str, optional): Page identifier (defaults to 'home').
+            governorate (str, optional): Visitor's governorate for geographic analytics.
+        
+        Headers:
+            X-Forwarded-For: Real IP address (for load balancer scenarios).
+            User-Agent: Browser/client information for device detection.
+        
+        Returns:
+            JSON response with visit confirmation and visitor information,
+            or error details if the request is invalid or rate limited.
+            
+        Business Logic:
+            1. Extract and validate IP address from headers
+            2. Detect and filter bot traffic
+            3. Apply rate limiting per IP address
+            4. Detect device type and browser
+            5. Record visit with full analytics
+            6. Return confirmation with visitor details
+        """
         try:
-            # الحصول على بيانات الطلب
+            # Get request data
             data = request.get_json() or {}
             
-            # الحصول على IP من الطلب
+            # Extract IP address from request headers
             ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
             if ',' in ip_address:
                 ip_address = ip_address.split(',')[0].strip()
             
-            # الحصول على User Agent
+            # Get User Agent for device detection
             user_agent = request.headers.get('User-Agent', '')
             
-            # التحقق من صحة البيانات
+            # Validate IP address format
             if not utils.is_valid_ip(ip_address):
                 return {"error": "عنوان IP غير صحيح"}, 400
             
-            # تجاهل الـ bots
+            # Filter out bot traffic
             if utils.is_bot_user_agent(user_agent):
                 return {"message": "تم تجاهل الطلب (bot detected)"}, 200
             
-            # إنشاء بيانات الزائر
+            # Create visitor data object
             visitor_data = VisitorData(
                 ip_address=ip_address,
                 user_agent=user_agent,
@@ -80,7 +140,7 @@ class VisitorCounter(Resource):
                 browser=utils.detect_browser(user_agent)
             )
             
-            # تسجيل الزيارة
+            # Record the visit
             success = visitor_service.record_visit(visitor_data)
             
             if success:
@@ -99,10 +159,28 @@ class VisitorCounter(Resource):
             return {"error": f"خطأ في تسجيل الزيارة: {str(e)}"}, 500
 
 class VisitorStats(Resource):
-    """إحصائيات الزوار"""
+    """
+    Visitor statistics endpoint for dashboard and analytics.
+    
+    This resource provides comprehensive visitor statistics including total visitors,
+    daily counts, unique visitors, and page views. It's used by admin dashboards
+    and analytics interfaces to display platform usage metrics.
+    """
     
     def get(self):
-        """الحصول على إحصائيات الزوار"""
+        """
+        Retrieve current visitor statistics.
+        
+        Returns comprehensive visitor metrics including:
+        - Total visitors since platform launch
+        - Daily visitor count (resets at midnight)
+        - Unique visitor count (based on IP addresses)
+        - Total page views across all pages
+        - Last reset timestamp for daily counters
+        
+        Returns:
+            JSON response with complete visitor statistics.
+        """
         try:
             stats = visitor_service.get_visitor_stats()
             return stats.to_dict(), 200
@@ -110,10 +188,27 @@ class VisitorStats(Resource):
             return {"error": f"خطأ في الحصول على الإحصائيات: {str(e)}"}, 500
 
 class PageStats(Resource):
-    """إحصائيات الصفحات"""
+    """
+    Page-level statistics endpoint for content analytics.
+    
+    This resource provides detailed statistics for each tracked page, helping
+    administrators understand which content is most popular and how users
+    navigate through the platform.
+    """
     
     def get(self):
-        """الحصول على إحصائيات الصفحات"""
+        """
+        Retrieve statistics for all tracked pages.
+        
+        Returns page-level analytics including:
+        - Page identifier and human-readable name
+        - Total views for each page
+        - Estimated unique visitors per page
+        - Relative popularity rankings
+        
+        Returns:
+            JSON array with statistics for all tracked pages.
+        """
         try:
             page_stats = visitor_service.get_page_stats()
             return [stats.to_dict() for stats in page_stats], 200
@@ -121,14 +216,31 @@ class PageStats(Resource):
             return {"error": f"خطأ في الحصول على إحصائيات الصفحات: {str(e)}"}, 500
 
 class HourlyStats(Resource):
-    """إحصائيات الساعات"""
+    """
+    Hourly traffic pattern endpoint for time-based analytics.
+    
+    This resource provides hourly breakdown of visitor traffic, enabling
+    administrators to understand peak usage times and optimize resource
+    allocation accordingly.
+    """
     
     def get(self):
-        """الحصول على إحصائيات الساعات"""
+        """
+        Retrieve hourly visitor statistics.
+        
+        Returns traffic patterns broken down by hour of day (0-23) with:
+        - Hour identifier (0-23)
+        - Visit count for that hour
+        - Time period classification (morning, afternoon, evening, night)
+        - Human-readable period names
+        
+        Returns:
+            JSON array with hourly traffic statistics.
+        """
         try:
             hourly_stats = visitor_service.get_hourly_stats()
             
-            # تنسيق البيانات
+            # Format data with additional metadata
             formatted_stats = []
             for hour, visits in hourly_stats.items():
                 period = utils.get_hour_period(hour)
@@ -144,24 +256,56 @@ class HourlyStats(Resource):
             return {"error": f"خطأ في الحصول على إحصائيات الساعات: {str(e)}"}, 500
 
 class TrackedPages(Resource):
-    """الصفحات المتتبعة"""
+    """
+    Configuration endpoint for tracked pages information.
+    
+    This resource provides the list of pages that are being tracked by the
+    visitor counter service, including their identifiers and display names.
+    """
     
     def get(self):
-        """الحصول على قائمة الصفحات المتتبعة"""
+        """
+        Retrieve list of tracked pages.
+        
+        Returns configuration information about all pages being tracked
+        by the visitor counter service, including page identifiers and
+        human-readable names for display purposes.
+        
+        Returns:
+            JSON array with tracked page configurations.
+        """
         return constants.TRACKED_PAGES, 200
 
 class ResetCounters(Resource):
-    """إعادة تعيين العدادات"""
+    """
+    Administrative endpoint for manual counter resets.
+    
+    This resource provides administrative functionality to manually reset
+    daily counters. It should be protected with proper authentication in
+    production environments.
+    """
     
     def post(self):
-        """إعادة تعيين العدادات اليومية (للإدارة فقط)"""
+        """
+        Manually reset daily counters.
+        
+        This endpoint allows administrators to manually trigger a reset of
+        daily visitor counters. Normally this happens automatically at midnight,
+        but manual resets may be needed for testing or maintenance purposes.
+        
+        Returns:
+            JSON response confirming the reset operation.
+            
+        Security Note:
+            This endpoint should be protected with authentication in production.
+        """
         try:
             visitor_service.reset_daily_counters()
             return {"message": "تم إعادة تعيين العدادات بنجاح"}, 200
         except Exception as e:
             return {"error": f"خطأ في إعادة تعيين العدادات: {str(e)}"}, 500
 
-# تسجيل الموارد
+# Register API resources with their endpoints
 api.add_resource(HealthCheck, '/health')
 api.add_resource(VisitorCounter, '/api/visitors/count/')
 api.add_resource(VisitorStats, '/api/visitors/stats/')
@@ -170,41 +314,52 @@ api.add_resource(HourlyStats, '/api/visitors/hourly/')
 api.add_resource(TrackedPages, '/api/visitors/tracked-pages/')
 api.add_resource(ResetCounters, '/api/visitors/reset/')
 
-# معالجات الأخطاء
+# Error handlers
 @app.errorhandler(404)
 def not_found(error):
+    """Handle 404 Not Found errors."""
     return jsonify({"error": "الصفحة غير موجودة"}), 404
 
 @app.errorhandler(500)
 def internal_error(error):
+    """Handle 500 Internal Server errors."""
     return jsonify({"error": "خطأ داخلي في الخادم"}), 500
 
-# وظيفة إعادة التعيين اليومية التلقائية
+# Scheduled job functions
 def daily_reset_job():
-    """مهمة إعادة التعيين اليومية"""
+    """
+    Automated daily reset job.
+    
+    This function is called automatically at midnight to reset daily counters
+    while preserving historical data and total counters.
+    """
     if app.config['RESET_DAILY']:
         visitor_service.reset_daily_counters()
 
-# وظيفة النسخ الاحتياطي
 def backup_job():
-    """مهمة النسخ الاحتياطي"""
+    """
+    Automated backup job.
+    
+    This function performs periodic backups of visitor data. The actual backup
+    logic can be implemented based on specific requirements and storage solutions.
+    """
     try:
-        # يمكن إضافة منطق النسخ الاحتياطي هنا
-        print("✅ تم تنفيذ النسخ الاحتياطي")
+        # Backup logic can be implemented here
+        print("✅ Backup completed successfully")
     except Exception as e:
-        print(f"❌ خطأ في النسخ الاحتياطي: {e}")
+        print(f"❌ Backup error: {e}")
 
 if __name__ == '__main__':
-    # تهيئة البيانات الافتراضية
+    # Initialize default data for testing and demonstration
     try:
         visitor_service.initialize_default_data()
-        print("✅ تم تهيئة البيانات الافتراضية")
+        print("✅ Default data initialized successfully")
     except Exception as e:
-        print(f"❌ خطأ في تهيئة البيانات: {e}")
+        print(f"❌ Error initializing data: {e}")
     
-    # إعداد المهام المجدولة
+    # Setup scheduled jobs
     if app.config['RESET_DAILY']:
-        # إعادة تعيين يومية في منتصف الليل
+        # Daily reset at midnight
         scheduler.add_job(
             func=daily_reset_job,
             trigger="cron",
@@ -213,7 +368,7 @@ if __name__ == '__main__':
             id='daily_reset'
         )
     
-    # نسخ احتياطي كل ساعة
+    # Hourly backup job
     scheduler.add_job(
         func=backup_job,
         trigger="interval",
@@ -221,13 +376,13 @@ if __name__ == '__main__':
         id='backup_job'
     )
     
-    # بدء المجدول
+    # Start the scheduler
     scheduler.start()
     
-    # إيقاف المجدول عند إغلاق التطبيق
+    # Shutdown scheduler when application exits
     atexit.register(lambda: scheduler.shutdown())
     
-    # تشغيل التطبيق
+    # Run the application
     app.run(
         host='0.0.0.0',
         port=app.config['PORT'],
